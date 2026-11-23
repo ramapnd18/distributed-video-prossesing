@@ -68,7 +68,8 @@ Proyek UAS Komputasi Paralel dan Sistem Terdistribusi.
 2. **Registrasi.** Worker mencari Master (`--master-ip auto`) dan mengulang
    pencarian sampai `--connect-timeout` (default 60 s), lalu mengirim `REGISTER`
    berisi `worker_id`, jumlah core, RAM, dan hostname. Master menunggu sampai
-   jumlah Worker = `--workers` atau `--startup-timeout` habis.
+   jumlah Worker = `--workers` atau `--startup-timeout` habis; dengan
+   `--confirm-start`, Master mulai segera setelah pengguna mengetik `y`.
 3. **Dekomposisi.** Master menghitung `total_core` (remote + lokal), lalu
    `frames_per_task = ceil(total_frame / (total_core x chunks_per_core))`,
    dibatasi `[MIN_TASK_FRAMES, batch_size]`. Daftar task berisi
@@ -182,7 +183,7 @@ python scripts/local_cluster.py --workers 2 --lb dynamic \
 Di komputer **Master**:
 
 ```bash
-python master.py --workers 9 --lb dynamic \
+python master.py --workers 9 --confirm-start --lb dynamic \
   --video data/input_video.mp4 --output data/output_video.mp4 \
   --target-res 1920x1080 --chunks-per-core 4 --task-timeout 45 \
   --tag uas --scenario-name Distributed_Dynamic_9W \
@@ -207,8 +208,22 @@ Ganti `--id` menjadi `WORKER-01` ... `WORKER-09` dan `--cores` sesuai jumlah
 core fisik tiap PC. Pastikan port TCP `5050` dan UDP `9999` dibuka di firewall
 Master.
 
-Master baru mulai memproses setelah jumlah Worker terdaftar = `--workers`.
-Gunakan `--startup-timeout 120` (default) agar Master tidak menunggu selamanya.
+Tanpa `--confirm-start`, Master baru mulai memproses setelah jumlah Worker
+terdaftar = `--workers`, atau setelah `--startup-timeout` (default 120 s) habis.
+
+Dengan `--confirm-start`, Master **tidak menunggu** jumlah Worker. Setelah cache
+siap, Master menampilkan:
+
+```text
+[START] Siap. Worker remote terdaftar: 3/9 | total core: 28.
+[START] Mulai pemrosesan sekarang? [y] mulai, [n] tunggu Worker lain, [q] batal:
+```
+
+- `y` → mulai saat itu juga dengan Worker yang sudah terdaftar.
+- `n` → tunggu Worker lain (atau 10 detik), lalu ditanya lagi.
+- `q` → batalkan; tidak ada video/metrik yang ditulis.
+
+Worker yang mendaftar setelah pemrosesan dimulai tetap ikut mengambil task.
 Karena Master ikut komputasi secara default, node fisik yang dipakai adalah
 1 Master + 9 Worker; tambahkan `--no-local-worker` jika ingin Master murni
 koordinator.
@@ -248,6 +263,7 @@ Untuk melihat tampilan "banyak Worker" di satu PC, pakai
 | 1 Node (Master-only) | `python master.py --workers 0 --tag uas` (tanpa Worker) |
 | Distributed Static | `python master.py --workers 9 --lb static --tag uas` + 9 Worker |
 | Distributed Dynamic | `python master.py --workers 9 --lb dynamic --tag uas` + 9 Worker |
+| Demo manual (mulai saat `y`) | `python master.py --workers 9 --confirm-start --tag uas` |
 | Scalability | Ulangi dynamic dengan `--workers 1/2/4/6/9`, tag berbeda per jumlah Worker |
 | Fault Tolerance | Jalankan 9 Worker, lalu `Ctrl+C` 1-2 Worker di tengah proses |
 
@@ -346,7 +362,7 @@ task `IN_PROGRESS` (serta sisa antrean static) ke `PENDING`.
 | Master tidak ditemukan (auto) | Pastikan Master berjalan tanpa `--no-discovery`; subnet harus sama. Mode manual: `python worker.py --master-ip <IP>`. |
 | Worker berhenti padahal Master jalan | Jangan pakai `--workers 0` bila ada Worker remote: `0` berarti master-only dan Master bisa selesai sebelum Worker bergabung. Pakai `--workers <jumlah>`. |
 | Dua Worker di satu PC dianggap satu | Beri `--id` berbeda: `--id WORKER-01` dan `--id WORKER-02` (default memakai hostname). |
-| Master menunggu terus | Jumlah Worker kurang dari `--workers`; cek log registrasi, atau `--workers 0` untuk master-only. |
+| Master menunggu terus | Jumlah Worker kurang dari `--workers`; cek log registrasi, pakai `--confirm-start` untuk mulai manual dengan `y`, atau `--workers 0` untuk master-only. |
 | Task terlalu kecil / overhead tinggi | Naikkan `--chunks-per-core` lebih kecil (mis. 2) atau set `--task-frames` eksplisit. |
 | Task timeout padahal Worker hidup | Naikkan `--task-timeout` atau perkecil `--task-frames`. |
 | Worker dianggap mati padahal hidup | Interval heartbeat harus < `--hb-timeout`; cek jaringan. |

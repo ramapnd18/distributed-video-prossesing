@@ -101,6 +101,7 @@ Test-NetConnection 192.168.1.10 -Port 5050
 ```bash
 python master.py \
   --workers 9 \
+  --confirm-start \
   --lb dynamic \
   --video data/input_video.mp4 \
   --output data/output_video.mp4 \
@@ -112,6 +113,18 @@ python master.py \
   --log-lb \
   --csv logs/experiment_results.csv
 ```
+
+Dengan `--confirm-start`, Master tidak menunggu 9 Worker. Setelah cache siap,
+Master menampilkan jumlah Worker yang sudah terdaftar dan bertanya:
+
+```text
+[START] Mulai pemrosesan sekarang? [y] mulai, [n] tunggu Worker lain, [q] batal:
+```
+
+Ketik `y` untuk mulai segera, `n` untuk menunggu Worker lain (ditanya lagi
+setelah 10 detik atau saat ada Worker baru), atau `q` untuk membatalkan.
+Tanpa `--confirm-start`, Master baru mulai setelah 9 Worker terdaftar atau
+`--startup-timeout` habis.
 
 Tanpa `--batch-size`, ukuran task dihitung otomatis dari total core. Jika ingin
 task lebih besar (mengurangi overhead jaringan), pakai `--chunks-per-core 2`
@@ -158,10 +171,10 @@ Jalankan Worker **setelah** Master listen, atau bersamaan. Worker mengulang
 pencarian Master (UDP/TCP sweep) dan koneksi sampai `--connect-timeout`
 (default 60 detik), jadi Worker yang menyala lebih dulu tetap akan bergabung.
 
-Master mulai memproses setelah 9 Worker remote terdaftar (`[9/9]`). Jika ada
-Worker yang gagal mendaftar, Master menunggu sampai `--startup-timeout`
-(default 120s) lalu tetap mulai dengan Worker yang ada (tercatat di kolom
-`notes`).
+Master mulai memproses setelah 9 Worker remote terdaftar (`[9/9]`) atau setelah
+`--startup-timeout` (default 120s). Dengan `--confirm-start`, Master mulai
+segera setelah Anda mengetik `y`. Jika ada Worker yang gagal mendaftar, Master
+tetap mulai dengan Worker yang ada (tercatat di kolom `notes`).
 
 ## 6. Verifikasi saat berjalan
 
