@@ -169,6 +169,7 @@ class MasterServer:
         self.local_ready = threading.Event()
         self.cache_ready = threading.Event()
         self.start_confirmed = threading.Event()
+        self.confirmation_waiting = threading.Event()
         self.running = True
         self.processing_started = False
         self.shutting_down = False
@@ -252,6 +253,15 @@ class MasterServer:
     # ------------------------------------------------------------------
     def _remote_worker_count_locked(self) -> int:
         return sum(1 for info in self.workers.values() if not info.get("is_local"))
+
+    def _alive_remote_worker_ids_locked(self) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                worker_id
+                for worker_id, info in self.workers.items()
+                if not info.get("is_local") and info["status"] == "ALIVE"
+            )
+        )
 
     def _total_cores_locked(self) -> int:
         total = sum(
@@ -408,31 +418,9 @@ class MasterServer:
         # Beri accept loop waktu memproses Worker yang sudah mengantre.
         self.stop_event.wait(0.5)
 
-        last_worker_ids: tuple[str, ...] | None = None
         while not self.stop_event.is_set() and not self.start_confirmed.is_set():
             with self.lock:
-                worker_ids = tuple(
-                    sorted(
-                        worker_id
-                        for worker_id, info in self.workers.items()
-                        if not info.get("is_local") and info["status"] == "ALIVE"
-                    )
-                )
-                remote = len(worker_ids)
-                total_cores = self._total_cores_locked()
                 has_node = bool(self.workers)
-            if worker_ids != last_worker_ids:
-                last_worker_ids = worker_ids
-                target = (
-                    f"{remote}/{self.expected_workers}"
-                    if self.expected_workers > 0
-                    else f"{remote}"
-                )
-                connected = ", ".join(worker_ids) if worker_ids else "belum ada"
-                self.log(
-                    f"[START] Worker remote aktif: {target} ({connected}) "
-                    f"| total core: {total_cores}."
-                )
             try:
                 answer = input(
                     "[START] Mulai pemrosesan sekarang? "
@@ -466,22 +454,43 @@ class MasterServer:
                 return
 
             # `n` atau input lain: tunggu perubahan daftar Worker aktif.
+            self.confirmation_waiting.set()
+            with self.lock:
+                worker_ids = self._alive_remote_worker_ids_locked()
+                total_cores = self._total_cores_locked()
+            remote = len(worker_ids)
+            target = (
+                f"{remote}/{self.expected_workers}"
+                if self.expected_workers > 0
+                else f"{remote}"
+            )
+            connected = ", ".join(worker_ids) if worker_ids else "belum ada"
             self.log(
-                "[START] Menunggu Worker lain; daftar akan diperbarui saat status berubah."
+                f"[START] Worker remote aktif: {target} ({connected}) "
+                f"| total core: {total_cores}."
             )
             while not self.stop_event.is_set():
                 if self.stop_event.wait(0.5):
                     return
                 with self.lock:
-                    current_worker_ids = tuple(
-                        sorted(
-                            worker_id
-                            for worker_id, info in self.workers.items()
-                            if not info.get("is_local")
-                            and info["status"] == "ALIVE"
-                        )
-                    )
+                    current_worker_ids = self._alive_remote_worker_ids_locked()
+                    total_cores = self._total_cores_locked()
                 if current_worker_ids != worker_ids:
+                    remote = len(current_worker_ids)
+                    target = (
+                        f"{remote}/{self.expected_workers}"
+                        if self.expected_workers > 0
+                        else f"{remote}"
+                    )
+                    connected = (
+                        ", ".join(current_worker_ids)
+                        if current_worker_ids
+                        else "belum ada"
+                    )
+                    self.log(
+                        f"[START] Worker remote aktif: {target} ({connected}) "
+                        f"| total core: {total_cores}."
+                    )
                     break
 
     def _prepare_static_locked(self) -> None:
@@ -1049,10 +1058,6 @@ class MasterServer:
                         info["cpu_samples"].append(info["cpu_usage"])
                         info["ram_samples"].append(info["ram_usage"])
                         info["capacity_score"] = self._capacity_score(info)
-                        info["tasks_done"] = max(
-                            int(info["tasks_done"]),
-                            int(payload.get("tasks_done", info["tasks_done"])),
-                        )
                         self.worker_cpu_samples.append(info["cpu_usage"])
                         self.worker_ram_samples.append(info["ram_usage"])
                         self._log_lb_score_locked(worker_id, "heartbeat")
@@ -1103,12 +1108,17 @@ class MasterServer:
                     if self.expected_workers > 0
                     else "[Worker tambahan]"
                 )
-                self.log(
-                    f"[REGISTER] {worker_id} bergabung "
-                    f"({payload.get('cpu_cores', '?')} cores, "
-                    f"{float(payload.get('ram_gb', 0.0)):.1f} GB RAM) "
-                    f"{progress}"
-                )
+                if (
+                    not self.confirm_start
+                    or self.confirmation_waiting.is_set()
+                    or self.start_confirmed.is_set()
+                ):
+                    self.log(
+                        f"[REGISTER] {worker_id} bergabung "
+                        f"({payload.get('cpu_cores', '?')} cores, "
+                        f"{float(payload.get('ram_gb', 0.0)):.1f} GB RAM) "
+                        f"{progress}"
+                    )
                 self._maybe_start_processing_locked()
             return worker_id
 
