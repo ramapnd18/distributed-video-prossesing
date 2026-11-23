@@ -5,13 +5,16 @@ menuliskannya di laporan.
 
 ## 0. Persiapan
 
-Gunakan video, batch size, resolusi target, jumlah core per Worker, dan hardware
-yang **sama** untuk semua skenario agar perbandingan adil.
+Gunakan video, resolusi target, jumlah core per Worker, dan hardware yang
+**sama** untuk semua skenario agar perbandingan adil. Ukuran task distributed
+dihitung otomatis dari total core (`--chunks-per-core`, default 4), jadi
+semakin banyak Worker, task semakin kecil. Catat nilai `task_frames` di CSV
+untuk memastikan granularitas tiap run.
 
 Contoh:
 
 - Video: 1280x720, 30 FPS, 20 detik (600 frame) atau 1920x1080, 60 detik.
-- Batch: 30 frame/task.
+- Task: `ceil(total_frame / (total_core x 4))`, minimal 3 frame.
 - Target: resolusi yang sama dengan video uji.
 - Tag: `uas` (harus sama untuk T1, local parallel, dan distributed).
 
@@ -73,12 +76,12 @@ Fisik (9 Worker, masing-masing 4 core):
 ```bash
 python master.py --workers 9 --lb static \
   --video data/input_video.mp4 --output data/output_static.mp4 \
-  --batch-size 30 --target-res 1280x720 \
+  --chunks-per-core 4 --target-res 1280x720 \
   --tag uas --scenario-name Distributed_Static_9W --log-lb
 
 python master.py --workers 9 --lb dynamic \
   --video data/input_video.mp4 --output data/output_dynamic.mp4 \
-  --batch-size 30 --target-res 1280x720 \
+  --chunks-per-core 4 --target-res 1280x720 \
   --tag uas --scenario-name Distributed_Dynamic_9W --log-lb
 ```
 
@@ -89,11 +92,11 @@ Alternatif simulasi lokal:
 ```bash
 python simulate_cluster.py --workers 9 --lb static \
   --video data/input_video.mp4 --frame-limit 240 \
-  --batch-size 30 --target-res 1280x720 --tag uas --log-lb
+  --chunks-per-core 4 --target-res 1280x720 --tag uas --log-lb
 
 python simulate_cluster.py --workers 9 --lb dynamic \
   --video data/input_video.mp4 --frame-limit 240 \
-  --batch-size 30 --target-res 1280x720 --tag uas --log-lb
+  --chunks-per-core 4 --target-res 1280x720 --tag uas --log-lb
 ```
 
 Data tambahan:
@@ -111,8 +114,11 @@ Analisis:
 - Pada dynamic, Worker cepat/memiliki core lebih banyak mendapat lebih banyak
   task. Skor kapasitas:
   `cores * (1 - 0.60*cpu/100) * (1 - 0.40*ram/100)`.
-- Worker dengan skor >= 75% skor tertinggi boleh mengambil maksimal 2 batch per
-  round-trip (`--max-tasks-per-assignment 2`) selama antrean masih cukup.
+- Worker dengan skor >= 75% skor tertinggi boleh mengambil beberapa task per
+  round-trip: `ceil(core_worker / task_frames)` dibatasi
+  `--max-tasks-per-assignment` (default 4), selama antrean masih cukup.
+  Worker 4 core dengan task 5 frame tetap mengambil 1 task, sedangkan Master
+  multicore bisa mengambil beberapa task sekaligus.
 - Buat Gantt chart dari `task_timeline_*.csv` (sumbu X waktu, sumbu Y Worker,
   batang dari `assigned` sampai `completed`).
 
@@ -139,7 +145,9 @@ python simulate_cluster.py --workers 6 --cores-per-worker 1 --tag uas-scale-6 ..
 python simulate_cluster.py --workers 9 --cores-per-worker 1 --tag uas-scale-9 ...
 ```
 
-Setiap run harus memakai video, frame limit, batch, dan resolusi yang sama.
+Setiap run harus memakai video, frame limit, resolusi, dan total frame yang
+sama. `task_frames` akan mengecil saat jumlah Worker bertambah (karena dihitung
+dari total core); itu memang perilaku algoritma dan harus dicatat di laporan.
 
 Analisis:
 
@@ -191,7 +199,7 @@ Analisis:
 | Execution Time | wall-clock mulai semua Worker siap sampai hasil terakhir | `exec_time_sec` |
 | Speedup | `T1 / Tp` | `speedup` |
 | Efficiency per core | `(Speedup / total_cores) * 100%` | `efficiency_pct` |
-| Efficiency per node | `(Speedup / num_workers) * 100%` | `node_efficiency_pct` |
+| Efficiency per node | `(Speedup / nodes_total) * 100%` | `node_efficiency_pct` |
 | Throughput | `total_frame / Tp` | `throughput_fps` |
 | CPU Utilization | rata-rata telemetri heartbeat Worker | `avg_cpu_pct`, `max_cpu_pct` |
 | Memory Utilization | rata-rata telemetri heartbeat Worker | `avg_ram_pct`, `max_ram_pct` |
@@ -227,7 +235,9 @@ Tabel rekap yang disarankan:
 
 ## 8. Validasi sebelum menulis laporan
 
-- [ ] Semua run memakai video, frame limit, batch, resolusi, dan hardware yang sama.
+- [ ] Semua run memakai video, frame limit, resolusi, dan hardware yang sama.
+- [ ] `task_frames` dan `nodes_total` dicatat; jelaskan bahwa ukuran task
+      menyesuaikan jumlah core.
 - [ ] `lost_frames = 0` pada semua run yang valid.
 - [ ] Jumlah frame output = jumlah frame input.
 - [ ] `status = completed`.

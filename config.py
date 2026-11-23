@@ -12,7 +12,7 @@ MASTER_PORT = 5050
 # ---------------------------------------------------------------------------
 # Konfigurasi Pemrosesan Video & Task Decomposition
 # ---------------------------------------------------------------------------
-BATCH_SIZE = 30                    # Jumlah frame per task (mengurangi overhead jaringan)
+BATCH_SIZE = 30                    # Batas atas frame/task pada Master (ukuran aktual dari core)
 TARGET_RESOLUTION = (1920, 1080)   # Resolusi standar output (Full HD)
 ZLIB_COMPRESSION_LEVEL = 3         # Level 1-9 (3 = seimbang antara kecepatan CPU & ukuran paket)
 
@@ -33,7 +33,7 @@ STARTUP_TIMEOUT = 120.0            # Batas menunggu seluruh Worker terdaftar (0 
 NO_WORKER_TIMEOUT = 20.0           # Batas tanpa Worker hidup sebelum eksperimen dibatalkan
 # 3 attempt = 1 percobaan awal + 2 retry (setara MAX_RETRIES=2 pada referensi praktikum).
 MAX_TASK_ATTEMPTS = 3
-MAX_TASKS_PER_ASSIGNMENT = 1       # Dynamic LB: 1 task per worker sekali kirim (gaya referensi)
+MAX_TASKS_PER_ASSIGNMENT = 4       # Batas atas prefetch otomatis: ceil(core_worker / frame_per_task)
 
 # ---------------------------------------------------------------------------
 # Auto-discovery & Penjadwalan Gaya Referensi Praktikum

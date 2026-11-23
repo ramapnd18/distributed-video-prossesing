@@ -30,7 +30,7 @@ from config import (
     parse_resolution,
 )
 from discovery import discover_master
-from processor import process_encoded_frame
+from processor import process_encoded_frame, warmup
 from protocol import (
     MSG_ASSIGN_TASK,
     MSG_ERROR,
@@ -262,6 +262,17 @@ class WorkerNode:
             return 1
 
         self.task_sock.settimeout(SOCKET_TIMEOUT)
+
+        # Siapkan pool SEBELUM registrasi. Master menganggap Worker siap begitu
+        # REGISTER diterima, jadi biaya spawn + import OpenCV tidak masuk Tp.
+        self._create_pool()
+        if self.pool is not None:
+            try:
+                self.pool.submit(warmup, self.target_res).result(timeout=180)
+                self.log("Warmup pool selesai (OpenCV siap di semua proses).")
+            except Exception as exc:  # noqa: BLE001 - warmup gagal tidak fatal
+                self.log(f"Peringatan: warmup pool gagal ({exc}).")
+
         ram_gb = psutil.virtual_memory().total / (1024 ** 3)
         send_packet(
             self.task_sock,
@@ -288,7 +299,6 @@ class WorkerNode:
         hb_thread.start()
 
         try:
-            self._create_pool()
             while self.running:
                 send_packet(self.task_sock, MSG_REQUEST_TASK, {"worker_id": self.worker_id})
                 response = recv_packet(self.task_sock)
@@ -310,6 +320,7 @@ class WorkerNode:
                     self.stop_event.wait(WAIT_POLL_INTERVAL)
                 elif msg_type == MSG_SHUTDOWN:
                     self.log("Seluruh pekerjaan selesai. Worker berhenti.")
+                    self.stop_event.set()
                     break
                 elif msg_type == MSG_ERROR:
                     self.log(f"Master melaporkan error: {payload}")

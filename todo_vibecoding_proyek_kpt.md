@@ -17,6 +17,7 @@
    ├── processor.py             # [DONE] Pipeline OpenCV (Resize, Gray, Blur, Canny, Contours)
    ├── master.py                # [DONE] Server, Queue, LB, Heartbeat, Assembler
    ├── worker.py                # [DONE] Client, Heartbeat thread, ProcessPoolExecutor
+   ├── discovery.py             # [DONE] UDP broadcast + TCP sweep auto-discovery Master
    ├── benchmark.py             # [DONE] Mode Sequential (T1) & Local Parallel
    ├── simulate_cluster.py      # [DONE] Simulasi 1 Master + N Worker di 1 PC untuk uji lokal
    ├── requirements.txt         # [DONE] Daftar dependensi Python
@@ -109,12 +110,41 @@
 
 ---
 
+## Phase 6: Refactor Algoritma Mengikuti Referensi Praktikum
+
+- [x] **6.1 Auto-discovery Master/Worker**
+  - `discovery.py`: responder UDP `DISCOVER_MASTER` + `DISCOVER_WORKERS` (port 9999), `discover_master()` dengan fallback TCP sweep.
+  - `worker.py`: `--master-ip auto` (default), flag `--discovery-port` / `--discovery-timeout`.
+  - `master.py`: `--discovery/--no-discovery`, `--discovery-port`.
+
+- [x] **6.2 Dekomposisi task dari jumlah core**
+  - `task_frames = ceil(total_frame / (total_core x chunks_per_core))`, minimal 3 frame, maksimal `--batch-size`.
+  - CLI baru: `--task-frames`, `--chunks-per-core`, `--min-task-frames`.
+
+- [x] **6.3 Master ikut komputasi (gaya referensi `is_local`)**
+  - `MASTER-LOCAL` terdaftar sebagai Worker; semua frame dari task yang di-prefetch diproses dalam satu `pool.map` agar seluruh core terpakai.
+  - CLI: `--local-worker/--no-local-worker` (default aktif), `--local-cores`.
+
+- [x] **6.4 Timeout per task + retry**
+  - Task yang berjalan > `--task-timeout` (default 45 detik) memicu Worker ditandai mati dan task di-requeue (maks. 3 percobaan).
+
+- [x] **6.5 Validasi**
+  - Compile 15 file Python OK.
+  - `scripts/smoke_test.py`: 3/3 PASS, `lost_frames=0`.
+  - Master-only (`--workers 0`), dynamic 2 Worker, static + local worker, dan auto-discovery (UDP) diuji end-to-end.
+
+---
+
 ## Catatan Implementasi (Deviasi & Keputusan Teknis)
 
 - **Efficiency:** `efficiency_pct` dihitung per **total core** (`S_p / total_cores * 100`), sedangkan `node_efficiency_pct` dihitung per **jumlah Worker node** (`S_p / num_workers * 100`). Ini menghindari nilai efisiensi >100% yang membingungkan saat tiap node multicore. Keduanya tersedia di CSV dan tabel report.
 - **Baseline T1:** `get_latest_baseline_t1()` hanya memakai baris sequential dengan `tag`, `total_frames`, dan `target_res` yang sama. Jika belum ada, gunakan `--baseline-time`.
 - **Frame cache & transfer:** Master menyimpan frame sebagai JPEG di disk (bukan array di RAM). Input dikirim JPEG, hasil dikirim PNG lossless, keduanya dibungkus zlib. Ini keputusan desain agar 1080p tidak menghabiskan RAM/bandwidth.
 - **Benchmark:** Mode sequential/local-parallel memakai jalur `process_encoded_frame` (decode JPEG + pipeline + encode PNG) agar adil dibanding Worker; `process_batch_sequential()` dan `process_batch_parallel()` tetap tersedia dan mendukung `encoded=True`.
-- **Dynamic LB:** Pull-based ditambah capacity score dan prefetch maksimal `--max-tasks-per-assignment` (default 2). Riwayat skor selalu ditulis ke `logs/lb_scores_*.csv`; `--log-lb` menambah log assignment detail.
+- **Dynamic LB:** Pull-based, satu round-trip minimal satu task; capacity score `cores*(1-0.6*cpu/100)*(1-0.4*ram/100)` menentukan prefetch `ceil(core_worker / task_frames)` dibatasi `--max-tasks-per-assignment` (default 4). Riwayat skor selalu ditulis ke `logs/lb_scores_*.csv`; `--log-lb` menambah log assignment detail.
+- **Dekomposisi task:** Ukuran task tidak lagi batch tetap 30 frame. Master menghitung `task_frames = ceil(total_frame / (total_core x chunks_per_core))` (default `chunks_per_core=4`), minimal 3 frame, maksimal `--batch-size`. Task mengecil saat jumlah Worker bertambah.
+- **Master ikut komputasi:** `MASTER-LOCAL` didaftarkan sebagai Worker dengan seluruh core mesin (bisa dibatasi `--local-cores`), dan batch task diproses dalam satu `pool.map` agar semua core terpakai. Nonaktifkan dengan `--no-local-worker`.
+- **Discovery:** Modul `discovery.py` menjawab broadcast UDP `DISCOVER_MASTER` (port 9999) dan melakukan TCP sweep sebagai fallback. Worker default `--master-ip auto`; mode manual tetap didukung.
+- **Timeout per task:** Selain heartbeat timeout 6 detik, setiap task yang berjalan lebih dari `--task-timeout` (default 45 detik) memicu Worker ditandai mati dan task di-requeue (maksimal 3 percobaan).
 - **Simulasi lokal:** `simulate_cluster.py` default 9 Worker x 1 core; `scripts/local_cluster.py` default 2 Worker x 2 core untuk development cepat.
 - **CLI:** `master.py` menerima `--scenario` dan alias `--scenario-name`; `local_cluster.py` meneruskan `--scenario-name`.

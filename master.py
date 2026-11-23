@@ -54,7 +54,7 @@ from config import (
     parse_resolution,
 )
 from discovery import get_local_ips, start_master_responder
-from processor import process_encoded_frame
+from processor import process_encoded_frame, warmup
 from protocol import (
     MSG_ASSIGN_TASK,
     MSG_ERROR,
@@ -162,6 +162,7 @@ class MasterServer:
         self.lock = threading.RLock()
         self.stop_event = threading.Event()
         self.all_workers_ready = threading.Event()
+        self.local_ready = threading.Event()
         self.running = True
         self.processing_started = False
         self.shutting_down = False
@@ -343,6 +344,10 @@ class MasterServer:
     def _maybe_start_processing_locked(self) -> None:
         if self.processing_started or not self.workers:
             return
+        # Jangan mulai sebelum pool lokal selesai warmup, agar biaya spawn
+        # tidak ikut dihitung dalam execution time.
+        if self.local_worker and not self.local_ready.is_set():
+            return
         now = time.time()
         remote = self._remote_worker_count_locked()
         if remote >= self.expected_workers:
@@ -385,6 +390,22 @@ class MasterServer:
             f"ke {len(worker_ids)} Worker."
         )
 
+    def _max_tasks_for_worker_locked(self, worker_id: str) -> int:
+        """Prefetch otomatis: jumlah task in-flight agar semua core Worker terpakai.
+
+        Contoh: Worker 16 core dengan task 5 frame -> 4 task sekaligus.
+        Worker 4 core dengan task 5 frame -> tetap 1 task (gaya referensi).
+        """
+        if self.lb_mode != "dynamic":
+            return 1
+        info = self.workers.get(worker_id)
+        if not info:
+            return 1
+        cores = max(1, int(info.get("cores", 1)))
+        frames = max(1, int(self.task_frames_used or self.batch_size))
+        per_worker = math.ceil(cores / frames)
+        return max(1, min(self.max_tasks_per_assignment, per_worker))
+
     def _pick_tasks_locked(self, worker_id: str) -> tuple[str, list[dict]]:
         if not self.processing_started:
             return MSG_WAIT, []
@@ -394,7 +415,8 @@ class MasterServer:
         # 1. Prioritaskan task hasil requeue (fault tolerance) pada mode apa pun.
         if self.pending_queue:
             tasks = [self.pending_queue.popleft()]
-            if self.lb_mode == "dynamic" and self.max_tasks_per_assignment > 1:
+            limit = self._max_tasks_for_worker_locked(worker_id)
+            if limit > 1:
                 info = self.workers.get(worker_id)
                 alive = self._alive_worker_ids_locked()
                 # Prefetch hanya jika antrean masih cukup untuk Worker lain.
@@ -402,10 +424,7 @@ class MasterServer:
                     scores = [self._capacity_score(self.workers[wid]) for wid in alive]
                     max_score = max(scores) if scores else 0.0
                     if max_score > 0 and self._capacity_score(info) >= 0.75 * max_score:
-                        extra = min(
-                            self.max_tasks_per_assignment - 1,
-                            len(self.pending_queue),
-                        )
+                        extra = min(limit - 1, len(self.pending_queue))
                         for _ in range(extra):
                             tasks.append(self.pending_queue.popleft())
             return MSG_ASSIGN_TASK, tasks
@@ -624,29 +643,49 @@ class MasterServer:
             f"({self.local_cores} core, is_local=True)."
         )
 
-    def _local_process(self, encoded_frames: list[bytes]) -> list[bytes]:
-        if self.local_cores <= 1 or self.local_pool is None:
-            return [
-                process_encoded_frame(blob, self.target_res) for blob in encoded_frames
-            ]
-        worker_fn = partial(process_encoded_frame, target_res=self.target_res)
-        return list(self.local_pool.map(worker_fn, encoded_frames, chunksize=1))
+    def _local_execute_tasks(self, tasks: list[dict]) -> None:
+        """Proses semua task yang di-prefetch dalam SATU pool.map.
 
-    def _local_execute_task(self, task: dict) -> None:
-        task_id = int(task["task_id"])
+        Menggabungkan frame dari beberapa task membuat seluruh core Master lokal
+        terpakai, bukan hanya sebesar ukuran satu task kecil.
+        """
+        started = time.time()
+        groups: list[tuple[dict, int]] = []
+        flat: list[bytes] = []
         try:
-            started = time.time()
-            encoded_frames = read_task_frames(self.meta, task)
-            encoded_results = self._local_process(encoded_frames)
-            proc_time = time.time() - started
-        except Exception as exc:  # noqa: BLE001 - task harus di-requeue, bukan mematikan Master
-            self.log(f"[ERROR] {LOCAL_WORKER_ID} gagal task #{task_id:03d}: {exc}")
+            for task in tasks:
+                blobs = read_task_frames(self.meta, task)
+                groups.append((task, len(blobs)))
+                flat.extend(blobs)
+
+            if self.local_cores > 1 and self.local_pool is not None:
+                worker_fn = partial(process_encoded_frame, target_res=self.target_res)
+                outputs = list(self.local_pool.map(worker_fn, flat, chunksize=1))
+            else:
+                outputs = [
+                    process_encoded_frame(blob, self.target_res) for blob in flat
+                ]
+        except Exception as exc:  # noqa: BLE001 - task di-requeue, Master tetap hidup
+            self.log(f"[ERROR] {LOCAL_WORKER_ID} gagal batch task: {exc}")
             with self.lock:
-                if task_id in self.in_progress:
-                    self._requeue_task_locked(task, f"Master lokal error: {exc}")
+                for task in tasks:
+                    if int(task["task_id"]) in self.in_progress:
+                        self._requeue_task_locked(task, f"Master lokal error: {exc}")
             return
+
+        elapsed = time.time() - started
+        cursor = 0
         with self.lock:
-            self._accept_result_locked(LOCAL_WORKER_ID, task_id, encoded_results, proc_time)
+            for task, count in groups:
+                task_id = int(task["task_id"])
+                proc_time = elapsed * (count / max(1, len(flat)))
+                self._accept_result_locked(
+                    LOCAL_WORKER_ID,
+                    task_id,
+                    outputs[cursor : cursor + count],
+                    proc_time,
+                )
+                cursor += count
 
     def local_worker_loop(self) -> None:
         """Loop Worker lokal: tarik task dari antrean yang sama dengan Worker remote."""
@@ -663,6 +702,17 @@ class MasterServer:
                 self.local_pool = None
                 self.log(f"[LOCAL] Process pool gagal dibuat ({exc}); fallback sekuensial.")
 
+        if self.local_pool is not None:
+            try:
+                self.local_pool.submit(warmup, self.target_res).result(timeout=180)
+                self.log(
+                    f"[LOCAL] Warmup {self.local_cores} proses selesai "
+                    "(OpenCV siap sebelum timer mulai)."
+                )
+            except Exception as exc:  # noqa: BLE001 - warmup gagal tidak fatal
+                self.log(f"[LOCAL] Peringatan: warmup gagal ({exc}).")
+        self.local_ready.set()
+
         while self.running and not self.stop_event.is_set():
             with self.lock:
                 info = self.workers.get(LOCAL_WORKER_ID)
@@ -677,8 +727,7 @@ class MasterServer:
             if action != MSG_ASSIGN_TASK or not tasks:
                 self.stop_event.wait(WAIT_POLL_INTERVAL)
                 continue
-            for task in tasks:
-                self._local_execute_task(task)
+            self._local_execute_tasks(tasks)
 
         if self.local_pool is not None:
             self.local_pool.shutdown(wait=False, cancel_futures=True)
@@ -791,6 +840,11 @@ class MasterServer:
                         if elapsed <= self.task_timeout:
                             continue
                         worker_id = item["worker_id"]
+                        # Worker lokal tidak di-timeout: bila pool lokal macet,
+                        # seluruh proses Master ikut macet sehingga watchdog ini
+                        # tidak bisa menyelamatkannya.
+                        if self.workers.get(worker_id, {}).get("is_local"):
+                            continue
                         self.log(
                             f"[TIMEOUT] Task #{task_id:03d} pada {worker_id} "
                             f"({elapsed:.1f}s > {self.task_timeout:.0f}s) "
@@ -1262,7 +1316,6 @@ class MasterServer:
         if self.shutdown_done:
             return
         self.shutdown_done = True
-        self.shutting_down = True
         self.running = False
         self.stop_event.set()
         self.all_workers_ready.set()
@@ -1272,6 +1325,12 @@ class MasterServer:
                 self.server_sock.close()
             except OSError:
                 pass
+
+        # Kirim SHUTDOWN selagi handler thread masih membaca socket, lalu beri
+        # jeda singkat agar paket sempat diterima Worker sebelum koneksi ditutup.
+        self._send_shutdown_to_workers()
+        time.sleep(0.2)
+        self.shutting_down = True
 
         # Beri kesempatan Worker lokal menyelesaikan task yang sedang berjalan
         # sebelum video direkonstruksi, agar tidak ada frame yang hilang.
@@ -1285,8 +1344,6 @@ class MasterServer:
             self.local_pool = None
         if self.discovery_thread is not None and self.discovery_thread.is_alive():
             self.discovery_thread.join(timeout=1.0)
-
-        self._send_shutdown_to_workers()
 
         if self.hb_thread is not None:
             self.hb_thread.join(timeout=2.0)
@@ -1341,6 +1398,7 @@ class MasterServer:
                 expected_workers=self.expected_workers,
                 stop_event=self.stop_event,
                 bind_host="" if self.bind_host in ("0.0.0.0", "") else self.bind_host,
+                on_error=self.log,
             )
             self.log(
                 f"[DISCOVER] Auto-discovery aktif di UDP {self.discovery_port}. "
@@ -1361,6 +1419,8 @@ class MasterServer:
                 target=self.local_worker_loop, daemon=True, name="LocalWorker"
             )
             self.local_thread.start()
+        else:
+            self.local_ready.set()
 
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -1454,7 +1514,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--max-tasks-per-assignment",
         type=int,
         default=MAX_TASKS_PER_ASSIGNMENT,
-        help="Dynamic LB: maksimum batch per satu assignment (1 = satu task sekali kirim)",
+        help="Batas atas prefetch task per Worker (auto: ceil(core_worker / frame_per_task))",
     )
     parser.add_argument("--log-lb", action="store_true", help="Log capacity score setiap assignment task")
     parser.add_argument("--csv", type=str, default=LOG_CSV_PATH, help="Path CSV metrik")
@@ -1478,6 +1538,11 @@ def main() -> None:
         raise SystemExit("[ERROR] --task-frames minimal 1")
     if args.chunks_per_core < 1:
         raise SystemExit("[ERROR] --chunks-per-core minimal 1")
+    if args.workers == 0 and not args.local_worker:
+        raise SystemExit(
+            "[ERROR] --workers 0 tanpa --local-worker = tidak ada node komputasi. "
+            "Aktifkan Master lokal atau tunggu minimal 1 Worker remote."
+        )
 
     master = MasterServer(
         video_path=args.video,

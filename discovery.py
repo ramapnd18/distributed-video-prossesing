@@ -23,6 +23,7 @@ import socket
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import Callable
 
 DISCOVER_MASTER = b"DISCOVER_MASTER"
 DISCOVER_WORKERS = b"DISCOVER_WORKERS"
@@ -82,6 +83,7 @@ def start_master_responder(
     stop_event: threading.Event,
     bind_host: str = "",
     hostname: str | None = None,
+    on_error: Callable[[str], None] | None = None,
 ) -> threading.Thread:
     """Jalankan thread yang menjawab broadcast DISCOVER_MASTER dari Worker."""
 
@@ -91,7 +93,12 @@ def start_master_responder(
             return
         try:
             sock.bind((bind_host, int(discovery_port)))
-        except OSError:
+        except OSError as exc:
+            if on_error is not None:
+                on_error(
+                    f"[DISCOVER] Gagal bind UDP {discovery_port}: {exc}. "
+                    "Worker harus memakai --master-ip manual."
+                )
             try:
                 sock.close()
             except OSError:

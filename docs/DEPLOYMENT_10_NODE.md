@@ -8,7 +8,8 @@ Panduan ini untuk pengujian wajib UAS: **10 node fisik** dalam satu LAN/WLAN.
                          +---------------------------+
                          |   MASTER (192.168.1.10)   |
                          |   master.py --workers 9   |
-                         |   port TCP 5050           |
+                         |   TCP 5050 + UDP 9999     |
+                         |   + Worker lokal (default)|
                          +-------------+-------------+
                                        |
               +------------------------+------------------------+
@@ -24,14 +25,15 @@ Panduan ini untuk pengujian wajib UAS: **10 node fisik** dalam satu LAN/WLAN.
         +----------+ +----------+ +----------+ +----------+ +----------+
 ```
 
-Semua node harus berada di subnet yang sama, saling `ping`, dan port 5050
-Master terbuka.
+Semua node harus berada di subnet yang sama, saling `ping`, port TCP 5050 dan
+UDP 9999 Master terbuka. UDP 9999 hanya dipakai auto-discovery; jika jaringan
+kampus memblokir broadcast, Worker tetap bisa memakai `--master-ip` manual.
 
 ## 2. Rencana IP (contoh)
 
 | Node | Hostname | IP statis | Peran | Core |
 |---|---|---|---|---|
-| Master | MASTER | 192.168.1.10 | Server, queue, LB, assembler | - |
+| Master | MASTER | 192.168.1.10 | Server, queue, LB, assembler, Worker lokal | semua core |
 | Worker 1 | WORKER-01 | 192.168.1.11 | Worker | 4 |
 | Worker 2 | WORKER-02 | 192.168.1.12 | Worker | 4 |
 | Worker 3 | WORKER-03 | 192.168.1.13 | Worker | 4 |
@@ -66,9 +68,11 @@ Worker **tidak** perlu video; Worker hanya menerima byte frame dari Master.
 ### Windows (Master)
 
 ```powershell
-# Buka port 5050
+# Buka TCP 5050 (task/result) + UDP 9999 (auto-discovery)
 New-NetFirewallRule -DisplayName "DVP Master 5050" `
   -Direction Inbound -Protocol TCP -LocalPort 5050 -Action Allow
+New-NetFirewallRule -DisplayName "DVP Discovery 9999" `
+  -Direction Inbound -Protocol UDP -LocalPort 9999 -Action Allow
 
 # Cek IP
 ipconfig
@@ -78,6 +82,7 @@ ipconfig
 
 ```bash
 sudo ufw allow 5050/tcp
+sudo ufw allow 9999/udp
 ip addr show
 ```
 
@@ -99,14 +104,22 @@ python master.py \
   --lb dynamic \
   --video data/input_video.mp4 \
   --output data/output_video.mp4 \
-  --batch-size 30 \
   --target-res 1920x1080 \
+  --chunks-per-core 4 \
+  --task-timeout 45 \
   --tag uas-dynamic \
   --scenario-name Distributed_Dynamic_9W \
-  --max-tasks-per-assignment 2 \
   --log-lb \
   --csv logs/experiment_results.csv
 ```
+
+Tanpa `--batch-size`, ukuran task dihitung otomatis dari total core. Jika ingin
+task lebih besar (mengurangi overhead jaringan), pakai `--chunks-per-core 2`
+atau `--task-frames <n>`; `--batch-size` hanya batas atas.
+
+Master ikut komputasi sebagai `MASTER-LOCAL` secara default. Untuk membuat
+Master murni koordinator (mis. agar perbandingan node bersih), tambahkan
+`--no-local-worker`.
 
 Untuk membandingkan static vs dynamic, jalankan juga dengan `--lb static`
 dan tag/`--scenario-name` yang sesuai. Agar Speedup terisi otomatis, buat
@@ -121,24 +134,33 @@ Jika baseline memakai tag lain, isi `--baseline-time <T1_detik>` secara eksplisi
 Master akan menampilkan:
 
 ```
-[MASTER] Mendengarkan koneksi di 0.0.0.0:5050 (Menunggu 9 Worker, LB=DYNAMIC)...
+[DISCOVER] Auto-discovery aktif di UDP 9999. IP Master: 192.168.1.10
+[MASTER] Mendengarkan koneksi di 0.0.0.0:5050 (Menunggu 9 Worker remote, LB=DYNAMIC).
+[LOCAL] Master ikut komputasi sebagai MASTER-LOCAL (8 core, is_local=True).
 ```
 
 ### 9 Worker (di masing-masing PC)
 
 ```bash
-python worker.py --master-ip 192.168.1.10 --port 5050 --id WORKER-01 --cores 4
-python worker.py --master-ip 192.168.1.10 --port 5050 --id WORKER-02 --cores 4
+python worker.py --id WORKER-01 --cores 4
+python worker.py --id WORKER-02 --cores 4
 ...
-python worker.py --master-ip 192.168.1.10 --port 5050 --id WORKER-09 --cores 4
+python worker.py --id WORKER-09 --cores 4
+```
+
+Worker menemukan Master otomatis. Jika UDP diblokir, isi manual:
+
+```bash
+python worker.py --master-ip 192.168.1.10 --port 5050 --id WORKER-01 --cores 4
 ```
 
 Jalankan Worker **setelah** Master listen, atau bersamaan; Worker punya retry
 koneksi 60 detik.
 
-Master mulai memproses setelah 9 Worker terdaftar (`[9/9]`). Jika ada Worker
-yang gagal mendaftar, Master menunggu sampai `--startup-timeout` (default 120s)
-lalu tetap mulai dengan Worker yang ada (tercatat di kolom `notes`).
+Master mulai memproses setelah 9 Worker remote terdaftar (`[9/9]`). Jika ada
+Worker yang gagal mendaftar, Master menunggu sampai `--startup-timeout`
+(default 120s) lalu tetap mulai dengan Worker yang ada (tercatat di kolom
+`notes`).
 
 ## 6. Verifikasi saat berjalan
 
@@ -147,15 +169,16 @@ Di Master:
 ```
 [REGISTER] WORKER-01 bergabung (4 cores, 8.0 GB RAM) [1/9]
 ...
-[MASTER] Pemrosesan dimulai (DYNAMIC LB) ...
-[PROGRESS] Task #000 selesai oleh WORKER-03 (1.24s) | Total: 1/240
+[DECOMPOSE] Total data: 600 frame | Total core: 36 core | Ukuran task: 5 frame | Jumlah task: 120
+[MASTER] Pemrosesan dimulai (DYNAMIC LB) - seluruh 9 Worker remote terdaftar.
+[OK] Task #000 <- WORKER-03 (1.24s) | Selesai: 1/120
 ```
 
 Di Worker:
 
 ```
-[WORKER-01] Memproses Task #004 (30 frame) di 4 core...
-[WORKER-01] Task #004 terkirim (1.18s, 30 frame).
+[WORKER-01] Memproses Task #004 (5 frame) di 4 core...
+[WORKER-01] Task #004 terkirim (1.18s, 5 frame).
 ```
 
 Di akhir, Master menulis:
@@ -174,11 +197,14 @@ Pada mode dynamic, Master menghitung capacity score tiap Worker:
 score = cores * (1 - 0.60*cpu/100) * (1 - 0.40*ram/100)
 ```
 
-Worker dengan skor tinggi dapat mengambil lebih dari satu batch per round-trip
-(maksimal `--max-tasks-per-assignment`, default 2) selama antrean masih cukup
-untuk Worker lain. Karena itu, PC dengan core lebih banyak wajar menerima task
-lebih banyak. Bandingkan kolom `tasks_done` di `distribution_*.csv` dan riwayat
-skor di `lb_scores_*.csv`; jangan memaksa distribusi rata seperti mode static.
+Worker dengan skor tinggi dapat mengambil beberapa task per round-trip. Jumlahnya
+dihitung otomatis: `ceil(core_worker / frame_per_task)` dibatasi
+`--max-tasks-per-assignment` (default 4), selama antrean masih cukup untuk
+Worker lain. Contoh: Worker 4 core dengan task 5 frame mengambil 1 task;
+Master 8 core dengan task 5 frame mengambil 2 task. Karena itu, PC dengan core
+lebih banyak wajar menerima task lebih banyak. Bandingkan kolom `tasks_done` di
+`distribution_*.csv` dan riwayat skor di `lb_scores_*.csv`; jangan memaksa
+distribusi rata seperti mode static.
 
 ### Simulasi sebelum ke lab
 
@@ -191,11 +217,12 @@ demonstrasi 10 node fisik.
 
 - [ ] 1 Master + 9 Worker fisik menyala dan terhubung LAN/WLAN.
 - [ ] Semua node `ping` Master.
-- [ ] Port 5050 terbuka di firewall Master.
+- [ ] Port TCP 5050 dan UDP 9999 terbuka di firewall Master.
 - [ ] Python 3.10+ dan `requirements.txt` terpasang di semua node.
 - [ ] Video uji ada di Master (`data/input_video.mp4`).
 - [ ] Master dijalankan dengan `--workers 9`.
-- [ ] Semua 9 Worker muncul di log registrasi `[9/9]`.
+- [ ] Semua 9 Worker muncul di log registrasi `[9/9]` (auto-discovery atau manual).
+- [ ] Kolom `nodes_total` di CSV = 10 (9 remote + Master lokal).
 - [ ] Tag, frame limit, dan resolusi baseline T1 sama dengan run distributed.
 - [ ] Output video berisi jumlah frame yang sama dengan input (`lost_frames=0`).
 - [ ] CSV metrik, timeline, distribusi, dan `lb_scores` tersimpan.
@@ -214,8 +241,8 @@ Master akan menampilkan:
 
 ```
 [FAULT TOLERANCE] Worker 'WORKER-04' terdeteksi MATI (...). 3 task di-requeue.
-[FAULT TOLERANCE] Task #021 dikembalikan ke antrean (attempt 1/5): ...
-[PROGRESS] Task #021 selesai oleh WORKER-07 ...
+[FAULT TOLERANCE] Task #021 dikembalikan ke antrean (attempt 1/3): ...
+[OK] Task #021 <- WORKER-07 (1.02s) | Selesai: 87/120
 ```
 
 Nilai yang dicatat:
@@ -238,9 +265,11 @@ Nilai yang dicatat:
 
 | Gejala | Penyebab umum | Solusi |
 |---|---|---|
-| Worker stuck "Menunggu Master" | IP/port salah, firewall | Cek `ping`, `Test-NetConnection`, buka port. |
+| Worker stuck "Menunggu Master" | IP/port salah, firewall, UDP diblokir | Cek `ping`, `Test-NetConnection`, buka TCP 5050 + UDP 9999; atau pakai `--master-ip`. |
+| Worker tidak ditemukan (auto) | Broadcast UDP diblokir AP/Wi-Fi | Pakai `--master-ip 192.168.1.10` manual. |
 | Master hanya melihat 8/9 | Satu Worker crash/salah ID | Cek log Worker; restart. |
 | Worker dianggap mati | Heartbeat > timeout | Naikkan `--hb-timeout` di Master, cek Wi-Fi. |
-| Transfer lambat | Wi-Fi 2.4 GHz / batch terlalu besar | Pakai kabel/5 GHz, turunkan `--batch-size`. |
+| Task timeout berulang | Task terlalu besar / Worker lambat | Naikkan `--task-timeout` atau perkecil `--task-frames`. |
+| Transfer lambat | Wi-Fi 2.4 GHz / task terlalu kecil | Pakai kabel/5 GHz, turunkan `--chunks-per-core` (mis. 2). |
 | RAM Master penuh | Video sangat besar | Cache disk otomatis; jangan hapus `data/frames_cache` saat run. |
 | Output tidak bisa diputar | Codec `mp4v` tidak tersedia | Install OpenCV lengkap / pakai VLC. |
