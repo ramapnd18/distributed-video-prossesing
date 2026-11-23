@@ -408,21 +408,29 @@ class MasterServer:
         # Beri accept loop waktu memproses Worker yang sudah mengantre.
         self.stop_event.wait(0.5)
 
-        last_count: int | None = None
+        last_worker_ids: tuple[str, ...] | None = None
         while not self.stop_event.is_set() and not self.start_confirmed.is_set():
             with self.lock:
-                remote = self._remote_worker_count_locked()
+                worker_ids = tuple(
+                    sorted(
+                        worker_id
+                        for worker_id, info in self.workers.items()
+                        if not info.get("is_local") and info["status"] == "ALIVE"
+                    )
+                )
+                remote = len(worker_ids)
                 total_cores = self._total_cores_locked()
                 has_node = bool(self.workers)
-            if remote != last_count:
-                last_count = remote
+            if worker_ids != last_worker_ids:
+                last_worker_ids = worker_ids
                 target = (
                     f"{remote}/{self.expected_workers}"
                     if self.expected_workers > 0
                     else f"{remote}"
                 )
+                connected = ", ".join(worker_ids) if worker_ids else "belum ada"
                 self.log(
-                    f"[START] Siap. Worker remote terdaftar: {target} "
+                    f"[START] Worker remote aktif: {target} ({connected}) "
                     f"| total core: {total_cores}."
                 )
             try:
@@ -457,17 +465,24 @@ class MasterServer:
                 self.stop_event.set()
                 return
 
-            # `n` atau input lain: tunggu Worker baru / 10 detik, lalu tanya lagi.
+            # `n` atau input lain: tunggu perubahan daftar Worker aktif.
             self.log(
-                "[START] Menunggu Worker lain; konfirmasi akan ditanyakan lagi."
+                "[START] Menunggu Worker lain; daftar akan diperbarui saat status berubah."
             )
-            deadline = time.time() + 10.0
-            while time.time() < deadline and not self.stop_event.is_set():
-                if self.stop_event.wait(1.0):
+            while not self.stop_event.is_set():
+                if self.stop_event.wait(0.5):
                     return
                 with self.lock:
-                    if self._remote_worker_count_locked() != remote:
-                        break
+                    current_worker_ids = tuple(
+                        sorted(
+                            worker_id
+                            for worker_id, info in self.workers.items()
+                            if not info.get("is_local")
+                            and info["status"] == "ALIVE"
+                        )
+                    )
+                if current_worker_ids != worker_ids:
+                    break
 
     def _prepare_static_locked(self) -> None:
         """Bagi rata task di awal ke seluruh Worker (mode static)."""
