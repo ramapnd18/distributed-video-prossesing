@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Dataset & cache (besar, tidak perlu masuk repo)
+data/frames_cache/
+data/output*.mp4
+data/input_smoke.mp4
+data/*.avi
+data/*.mkv
+
+# Log eksperimen
+logs/*.csv
+logs/*.csv.bak_*
+logs/runs/
+logs/*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,42 @@
+SUMBER & LISENSI VIDEO
+======================
+
+1. Video sampel sintetis (default repo)
+   - File          : data/input_video.mp4 (dibuat oleh scripts/make_sample_video.py)
+   - Pembuat       : tim proyek (dibuat sendiri dengan OpenCV)
+   - Lisensi       : bebas dipakai untuk keperluan akademik proyek ini
+   - Perintah      : python scripts/make_sample_video.py --width 1920 --height 1080 --seconds 60 --fps 30
+
+2. Big Buck Bunny (disarankan untuk laporan UAS)
+   - Situs resmi   : https://peach.blender.org/
+   - Studio        : Blender Foundation
+   - Lisensi       : Creative Commons Attribution 3.0 (CC BY 3.0)
+   - Tautan unduh  : https://download.blender.org/peach/bigbuckbunny_movies/
+   - Contoh file   : BigBuckBunny_124_1080p.mp4 (1080p)
+   - Atribusi      : "Big Buck Bunny" (c) Blender Foundation, CC BY 3.0.
+                     Cantumkan atribusi ini di laporan dan repositori.
+
+3. Pexels
+   - Situs         : https://www.pexels.com/videos/
+   - Lisensi       : Pexels License (gratis dipakai, atribusi tidak wajib)
+   - Catatan       : Jangan menjual ulang video apa adanya; ikuti ketentuan lisensi.
+
+4. Pixabay
+   - Situs         : https://pixabay.com/videos/
+   - Lisensi       : Pixabay Content License
+   - Catatan       : Ikuti ketentuan lisensi terbaru di situs resmi.
+
+REKOMENDASI SPESIFIKASI UNTUK EKSPERIMEN
+----------------------------------------
+- Resolusi       : 1920x1080 (Full HD) atau 3840x2160 (4K)
+- FPS            : 30 atau 60
+- Durasi         : 60-120 detik
+- Jumlah frame   : 1800-7200 frame (1080p) / 3600-14400 frame (4K)
+- Batch task     : 30-50 frame per task
+
+CARA MEMAKAI VIDEO EKSTERNAL
+----------------------------
+1. Unduh video resmi dari tautan di atas.
+2. Simpan sebagai data/input_video.mp4 (atau pakai --video PATH).
+3. Jalankan Master/Worker dengan --video PATH yang sama di Master.
+4. Cantumkan tautan, lisensi, dan atribusi di BAB II / lampiran laporan.
