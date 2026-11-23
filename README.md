@@ -180,14 +180,25 @@ python scripts/local_cluster.py --workers 2 --lb dynamic \
 
 ## Menjalankan 10 node fisik
 
-Di komputer **Master**:
+Di komputer **Master**, cukup:
 
 ```bash
-python master.py --workers 9 --confirm-start --lb dynamic \
-  --video data/input_video.mp4 --output data/output_video.mp4 \
-  --target-res 1920x1080 --chunks-per-core 4 --task-timeout 45 \
-  --tag uas --scenario-name Distributed_Dynamic_9W \
-  --csv logs/experiment_results.csv --log-lb
+python master.py
+```
+
+Itu sudah memakai default: `data/input_video.mp4`, output `data/output_video.mp4`,
+`--workers 9`, dan konfirmasi mulai (`y`). Setelah cache siap, Master menampilkan:
+
+```text
+[START] Siap. Worker remote terdaftar: 3/9 | total core: 28.
+[START] Mulai pemrosesan sekarang? [y] mulai, [n] tunggu Worker lain, [q] batal:
+```
+
+Ketik `y` untuk langsung mulai tanpa menunggu semua Worker. Jika ingin mengubah
+sesuatu, tambahkan flag seperlunya, misalnya:
+
+```bash
+python master.py --target-res 1920x1080 --tag uas --scenario-name Demo_9W --log-lb
 ```
 
 Di setiap komputer **Worker** (9 PC):
@@ -208,16 +219,10 @@ Ganti `--id` menjadi `WORKER-01` ... `WORKER-09` dan `--cores` sesuai jumlah
 core fisik tiap PC. Pastikan port TCP `5050` dan UDP `9999` dibuka di firewall
 Master.
 
-Tanpa `--confirm-start`, Master baru mulai memproses setelah jumlah Worker
-terdaftar = `--workers`, atau setelah `--startup-timeout` (default 120 s) habis.
-
-Dengan `--confirm-start`, Master **tidak menunggu** jumlah Worker. Setelah cache
-siap, Master menampilkan:
-
-```text
-[START] Siap. Worker remote terdaftar: 3/9 | total core: 28.
-[START] Mulai pemrosesan sekarang? [y] mulai, [n] tunggu Worker lain, [q] batal:
-```
+Secara default Master **tidak menunggu** jumlah Worker: setelah cache siap,
+Master menanyakan konfirmasi. Dengan `--no-confirm-start`, Master kembali
+menunggu sampai jumlah Worker = `--workers` atau `--startup-timeout`
+(default 120 s) habis (dipakai oleh skrip otomatis seperti `smoke_test.py`).
 
 - `y` → mulai saat itu juga dengan Worker yang sudah terdaftar.
 - `n` → tunggu Worker lain (atau 10 detik), lalu ditanya lagi.
@@ -230,26 +235,22 @@ koordinator.
 
 ### Tanpa Worker (hanya 1 node: Master)
 
-Untuk mencoba di satu PC, isi `--workers 0`. Master memakai seluruh core-nya
-sebagai Worker lokal, jadi tidak ada Worker terpisah yang perlu dijalankan.
+Cukup jalankan `python master.py`, lalu ketik `y`. Master memakai seluruh
+core-nya sebagai Worker lokal, jadi tidak ada Worker terpisah yang perlu
+dijalankan.
 
 ```bash
-python master.py --workers 0 --lb dynamic \
-  --video data/input_video.mp4 --output data/output_video.mp4 \
-  --target-res 1280x720 --chunks-per-core 4 --task-timeout 45 \
-  --tag uas --scenario-name Demo_1Node \
-  --csv logs/experiment_results.csv --log-lb
+python master.py
 ```
 
-- Jangan tambahkan `--no-local-worker` saat `--workers 0` (tidak akan ada node
-  komputasi dan Master menolak berjalan).
-- `--workers 0` berarti Master **tidak menunggu** Worker remote. Worker yang
-  menyala saat Master masih memproses tetap bisa ikut (muncul sebagai
+- Jangan tambahkan `--no-local-worker` saat tidak ada Worker remote (tidak akan
+  ada node komputasi dan Master menolak berjalan).
+- Worker yang menyala saat Master masih memproses tetap bisa ikut (muncul sebagai
   `[Worker tambahan]`), tetapi bila Master sudah selesai, Worker tidak akan
-  menemukannya. Untuk cluster sungguhan, isi `--workers <jumlah>`.
+  menemukannya. Untuk cluster sungguhan, jalankan Worker lalu konfirmasi
+  setelah jumlahnya sesuai.
 - Batasi core dengan `--local-cores 8` bila PC sedang dipakai untuk hal lain.
 - Tambahkan `--frame-limit 120` untuk uji cepat; hapus untuk video penuh.
-- Di PowerShell, gunakan backtick (`` ` ``) untuk lanjutan baris, bukan `\`.
 
 Untuk melihat tampilan "banyak Worker" di satu PC, pakai
 `python simulate_cluster.py --workers 9` (lihat bagian Quick start).
@@ -260,9 +261,9 @@ Untuk melihat tampilan "banyak Worker" di satu PC, pakai
 |---|---|
 | Sequential (T1) | `python benchmark.py --mode sequential --tag uas` |
 | Local Parallel | `python benchmark.py --mode local-parallel --cores 4 --tag uas` |
-| 1 Node (Master-only) | `python master.py --workers 0 --tag uas` (tanpa Worker) |
-| Distributed Static | `python master.py --workers 9 --lb static --tag uas` + 9 Worker |
-| Distributed Dynamic | `python master.py --workers 9 --lb dynamic --tag uas` + 9 Worker |
+| 1 Node (Master-only) | `python master.py` lalu ketik `y` (tanpa Worker remote) |
+| Distributed Static | `python master.py --lb static --tag uas` + 9 Worker |
+| Distributed Dynamic | `python master.py --tag uas` + 9 Worker |
 | Demo manual (mulai saat `y`) | `python master.py --workers 9 --confirm-start --tag uas` |
 | Scalability | Ulangi dynamic dengan `--workers 1/2/4/6/9`, tag berbeda per jumlah Worker |
 | Fault Tolerance | Jalankan 9 Worker, lalu `Ctrl+C` 1-2 Worker di tengah proses |

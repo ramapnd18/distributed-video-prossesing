@@ -99,23 +99,20 @@ Test-NetConnection 192.168.1.10 -Port 5050
 ### Master
 
 ```bash
-python master.py \
-  --workers 9 \
-  --confirm-start \
-  --lb dynamic \
-  --video data/input_video.mp4 \
-  --output data/output_video.mp4 \
-  --target-res 1920x1080 \
-  --chunks-per-core 4 \
-  --task-timeout 45 \
-  --tag uas-dynamic \
-  --scenario-name Distributed_Dynamic_9W \
-  --log-lb \
-  --csv logs/experiment_results.csv
+python master.py
 ```
 
-Dengan `--confirm-start`, Master tidak menunggu 9 Worker. Setelah cache siap,
-Master menampilkan jumlah Worker yang sudah terdaftar dan bertanya:
+Perintah itu memakai default: `data/input_video.mp4`, output
+`data/output_video.mp4`, `--workers 9`, dan konfirmasi mulai. Untuk eksperimen
+dengan resolusi/tag khusus, tambahkan flag yang perlu saja, misalnya:
+
+```bash
+python master.py --target-res 1920x1080 --tag uas-dynamic \
+  --scenario-name Distributed_Dynamic_9W --log-lb
+```
+
+Master tidak menunggu 9 Worker. Setelah cache siap, Master menampilkan jumlah
+Worker yang sudah terdaftar dan bertanya:
 
 ```text
 [START] Mulai pemrosesan sekarang? [y] mulai, [n] tunggu Worker lain, [q] batal:
@@ -123,8 +120,8 @@ Master menampilkan jumlah Worker yang sudah terdaftar dan bertanya:
 
 Ketik `y` untuk mulai segera, `n` untuk menunggu Worker lain (ditanya lagi
 setelah 10 detik atau saat ada Worker baru), atau `q` untuk membatalkan.
-Tanpa `--confirm-start`, Master baru mulai setelah 9 Worker terdaftar atau
-`--startup-timeout` habis.
+Dengan `--no-confirm-start`, Master baru mulai setelah 9 Worker terdaftar atau
+`--startup-timeout` habis (dipakai skrip otomatis).
 
 Tanpa `--batch-size`, ukuran task dihitung otomatis dari total core. Jika ingin
 task lebih besar (mengurangi overhead jaringan), pakai `--chunks-per-core 2`

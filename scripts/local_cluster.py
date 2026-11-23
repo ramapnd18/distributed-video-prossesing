@@ -149,6 +149,7 @@ def main() -> int:
         "--chunks-per-core", str(args.chunks_per_core),
         "--task-timeout", str(args.task_timeout),
         "--no-discovery",
+        "--no-confirm-start",
     ]
     master_cmd.append("--local-worker" if args.local_worker else "--no-local-worker")
     if args.task_frames:

@@ -1641,8 +1641,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--discovery-port", type=int, default=DISCOVERY_PORT, help="Port UDP auto-discovery")
     parser.add_argument(
         "--confirm-start",
-        action="store_true",
-        help="Tunggu konfirmasi `y` sebelum mulai; tidak menunggu jumlah --workers",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Tanya `y/n` sebelum mulai (default aktif; --no-confirm-start untuk otomatis)",
     )
     parser.add_argument("--target-res", type=str, default=format_resolution(TARGET_RESOLUTION), help="Resolusi output WIDTHxHEIGHT")
     parser.add_argument("--frame-limit", type=int, default=None, help="Batasi jumlah frame (untuk uji cepat)")
