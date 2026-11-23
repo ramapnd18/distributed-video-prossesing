@@ -54,15 +54,19 @@ Proyek UAS Komputasi Paralel dan Sistem Terdistribusi.
   Efeknya task mengecil saat node bertambah, sehingga rebalancing tetap halus.
 - **Auto-discovery.** Master menjawab broadcast `DISCOVER_MASTER` (UDP 9999).
   Worker dengan `--master-ip auto` (default) mengirim broadcast, lalu fallback
-  TCP sweep ke subnet lokal bila UDP diblokir. Matikan di Master dengan
-  `--no-discovery`, di Worker dengan `--master-ip <IP>`.
+  TCP sweep ke subnet lokal bila UDP diblokir. Setiap kandidat hasil sweep
+  diverifikasi dengan `PING`/`PONG`, jadi adapter virtual yang menerima semua
+  koneksi TCP (mis. VirtualBox `192.168.56.0/24`) tidak dianggap Master.
+  Matikan di Master dengan `--no-discovery`, di Worker dengan `--master-ip <IP>`.
 
 ## Alur algoritma
 
-1. **Inisialisasi.** Master membaca video, mengekstrak frame ke cache JPEG, membuka
-   listener TCP, menyalakan responder UDP discovery, dan (default) membuat
+1. **Inisialisasi.** Master membuka listener TCP dan menyalakan responder UDP
+   discovery lebih dulu, lalu mengekstrak frame ke cache JPEG (Worker boleh
+   connect dan menunggu selama proses ini) dan (default) membuat
    `ProcessPoolExecutor` untuk Worker lokal.
-2. **Registrasi.** Worker mencari Master (`--master-ip auto`), mengirim `REGISTER`
+2. **Registrasi.** Worker mencari Master (`--master-ip auto`) dan mengulang
+   pencarian sampai `--connect-timeout` (default 60 s), lalu mengirim `REGISTER`
    berisi `worker_id`, jumlah core, RAM, dan hostname. Master menunggu sampai
    jumlah Worker = `--workers` atau `--startup-timeout` habis.
 3. **Dekomposisi.** Master menghitung `total_core` (remote + lokal), lalu
@@ -191,8 +195,9 @@ Di setiap komputer **Worker** (9 PC):
 python worker.py --id WORKER-01 --cores 4
 ```
 
-Worker menemukan Master otomatis lewat UDP broadcast. Jika jaringan memblokir
-UDP, isi alamat manual:
+Worker menemukan Master otomatis lewat UDP broadcast. Worker boleh dinyalakan
+sebelum Master; pencarian diulang sampai `--connect-timeout` (default 60 detik).
+Jika jaringan memblokir UDP, isi alamat manual:
 
 ```bash
 python worker.py --master-ip 192.168.1.10 --port 5050 --id WORKER-01 --cores 4
@@ -223,6 +228,10 @@ python master.py --workers 0 --lb dynamic \
 
 - Jangan tambahkan `--no-local-worker` saat `--workers 0` (tidak akan ada node
   komputasi dan Master menolak berjalan).
+- `--workers 0` berarti Master **tidak menunggu** Worker remote. Worker yang
+  menyala saat Master masih memproses tetap bisa ikut (muncul sebagai
+  `[Worker tambahan]`), tetapi bila Master sudah selesai, Worker tidak akan
+  menemukannya. Untuk cluster sungguhan, isi `--workers <jumlah>`.
 - Batasi core dengan `--local-cores 8` bila PC sedang dipakai untuk hal lain.
 - Tambahkan `--frame-limit 120` untuk uji cepat; hapus untuk video penuh.
 - Di PowerShell, gunakan backtick (`` ` ``) untuk lanjutan baris, bukan `\`.
@@ -335,6 +344,8 @@ task `IN_PROGRESS` (serta sisa antrean static) ke `PENDING`.
 | `Video input tidak ditemukan` | `python scripts/make_sample_video.py` atau isi `--video`. |
 | Worker tidak bisa connect | Cek IP Master, `ping`, firewall TCP 5050 + UDP 9999, dan `--bind 0.0.0.0`. Bila UDP diblokir, pakai `--master-ip <IP>`. |
 | Master tidak ditemukan (auto) | Pastikan Master berjalan tanpa `--no-discovery`; subnet harus sama. Mode manual: `python worker.py --master-ip <IP>`. |
+| Worker berhenti padahal Master jalan | Jangan pakai `--workers 0` bila ada Worker remote: `0` berarti master-only dan Master bisa selesai sebelum Worker bergabung. Pakai `--workers <jumlah>`. |
+| Dua Worker di satu PC dianggap satu | Beri `--id` berbeda: `--id WORKER-01` dan `--id WORKER-02` (default memakai hostname). |
 | Master menunggu terus | Jumlah Worker kurang dari `--workers`; cek log registrasi, atau `--workers 0` untuk master-only. |
 | Task terlalu kecil / overhead tinggi | Naikkan `--chunks-per-core` lebih kecil (mis. 2) atau set `--task-frames` eksplisit. |
 | Task timeout padahal Worker hidup | Naikkan `--task-timeout` atau perkecil `--task-frames`. |

@@ -14,6 +14,8 @@ import zlib
 from config import MAX_PACKET_BYTES, SOCKET_TIMEOUT, ZLIB_COMPRESSION_LEVEL
 
 # Konstanta Tipe Pesan Protokol
+MSG_PING = "PING"                    # Validasi kandidat hasil TCP sweep
+MSG_PONG = "PONG"
 MSG_REGISTER = "REGISTER"
 MSG_REQUEST_TASK = "REQUEST_TASK"
 MSG_ASSIGN_TASK = "ASSIGN_TASK"

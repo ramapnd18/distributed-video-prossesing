@@ -154,8 +154,9 @@ Worker menemukan Master otomatis. Jika UDP diblokir, isi manual:
 python worker.py --master-ip 192.168.1.10 --port 5050 --id WORKER-01 --cores 4
 ```
 
-Jalankan Worker **setelah** Master listen, atau bersamaan; Worker punya retry
-koneksi 60 detik.
+Jalankan Worker **setelah** Master listen, atau bersamaan. Worker mengulang
+pencarian Master (UDP/TCP sweep) dan koneksi sampai `--connect-timeout`
+(default 60 detik), jadi Worker yang menyala lebih dulu tetap akan bergabung.
 
 Master mulai memproses setelah 9 Worker remote terdaftar (`[9/9]`). Jika ada
 Worker yang gagal mendaftar, Master menunggu sampai `--startup-timeout`

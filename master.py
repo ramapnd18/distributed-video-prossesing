@@ -59,6 +59,8 @@ from protocol import (
     MSG_ASSIGN_TASK,
     MSG_ERROR,
     MSG_HEARTBEAT,
+    MSG_PING,
+    MSG_PONG,
     MSG_REGISTER,
     MSG_REQUEST_TASK,
     MSG_SHUTDOWN,
@@ -163,6 +165,7 @@ class MasterServer:
         self.stop_event = threading.Event()
         self.all_workers_ready = threading.Event()
         self.local_ready = threading.Event()
+        self.cache_ready = threading.Event()
         self.running = True
         self.processing_started = False
         self.shutting_down = False
@@ -343,6 +346,9 @@ class MasterServer:
 
     def _maybe_start_processing_locked(self) -> None:
         if self.processing_started or not self.workers:
+            return
+        # Cache frame (terutama 1080p) bisa lama; jangan mulai sebelum siap.
+        if not self.cache_ready.is_set():
             return
         # Jangan mulai sebelum pool lokal selesai warmup, agar biaya spawn
         # tidak ikut dihitung dalam execution time.
@@ -885,6 +891,12 @@ class MasterServer:
             first_packet = recv_packet(conn)
             if not first_packet:
                 return
+            if first_packet["type"] == MSG_PING:
+                # Dipakai Worker untuk memvalidasi kandidat hasil TCP sweep.
+                # Tanpa ini, adapter virtual (mis. VirtualBox 192.168.56.0/24)
+                # yang menerima semua koneksi TCP bisa disangka Master.
+                send_packet(conn, MSG_PONG)
+                return
             if first_packet["type"] == MSG_HEARTBEAT:
                 self._heartbeat_loop(conn, first_packet)
                 return
@@ -981,11 +993,16 @@ class MasterServer:
                     self.first_worker_time = now
                 registered = self._remote_worker_count_locked()
                 self._log_lb_score_locked(worker_id, "register")
+                progress = (
+                    f"[{registered}/{self.expected_workers}]"
+                    if self.expected_workers > 0
+                    else "[Worker tambahan]"
+                )
                 self.log(
                     f"[REGISTER] {worker_id} bergabung "
                     f"({payload.get('cpu_cores', '?')} cores, "
                     f"{float(payload.get('ram_gb', 0.0)):.1f} GB RAM) "
-                    f"[{registered}/{self.expected_workers}]"
+                    f"{progress}"
                 )
                 self._maybe_start_processing_locked()
             return worker_id
@@ -1254,9 +1271,14 @@ class MasterServer:
         print("=" * 68)
         print(f"Status              : {self.status}")
         print(f"Mode Load Balancing : {self.lb_mode.upper()}")
+        workers_total = (
+            f"{record['workers_seen']}/{self.expected_workers}"
+            if self.expected_workers > 0
+            else f"{record['workers_seen']}"
+        )
         print(
             f"Node Komputasi      : {record['nodes_total']} "
-            f"({record['workers_seen']}/{self.expected_workers} Worker remote"
+            f"({workers_total} Worker remote"
             f"{' + Master lokal' if self.local_worker else ''})"
         )
         print(f"Ukuran Task         : {record['task_frames']} frame/task "
@@ -1384,7 +1406,6 @@ class MasterServer:
     # Server loop
     # ------------------------------------------------------------------
     def start(self) -> None:
-        self.decompose_video()
         self.sampler.start()
 
         with self.lock:
@@ -1454,6 +1475,16 @@ class MasterServer:
                 f"python worker.py --master-ip {self.master_ips[0] if self.master_ips else '<IP>'} "
                 "--id WORKER-01 --cores 4"
             )
+
+        # Cache disiapkan SETELAH listener terbuka: Worker boleh connect lebih
+        # dulu dan menunggu di backlog selama frame (mis. 1080p) diekstrak.
+        self.log(
+            "[MASTER] Menyiapkan cache frame; Worker boleh connect dan menunggu ..."
+        )
+        try:
+            self.decompose_video()
+        finally:
+            self.cache_ready.set()
 
         try:
             while self.running and not self.stop_event.is_set():

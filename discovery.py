@@ -25,6 +25,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
+from protocol import MSG_PING, MSG_PONG, ProtocolError, recv_packet, send_packet
+
 DISCOVER_MASTER = b"DISCOVER_MASTER"
 DISCOVER_WORKERS = b"DISCOVER_WORKERS"
 
@@ -135,27 +137,42 @@ def start_master_responder(
 
 
 def _probe_tcp_node(ip: str, port: int, timeout: float = 0.2) -> str | None:
+    """Cek port Master lalu validasi dengan PING/PONG.
+
+    Validasi wajib: sebagian adapter virtual (VirtualBox host-only
+    192.168.56.0/24) menerima koneksi TCP ke alamat mana pun, sehingga
+    connect saja tidak cukup untuk memastikan endpoint adalah Master.
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.settimeout(timeout)
-            if sock.connect_ex((ip, int(port))) == 0:
+            if sock.connect_ex((ip, int(port))) != 0:
+                return None
+            sock.settimeout(0.5)
+            send_packet(sock, MSG_PING)
+            reply = recv_packet(sock)
+            if reply is not None and reply.get("type") == MSG_PONG:
                 return ip
-    except OSError:
+    except (OSError, ProtocolError):
         pass
     return None
 
 
 def _tcp_sweep(tcp_port: int, timeout: float) -> tuple[str, int] | None:
     """Fallback: cari host dengan port Master terbuka di /24 lokal."""
-    targets: list[str] = []
+    targets: list[str] = ["127.0.0.1"]
+    seen_prefixes: set[str] = set()
     for ip in get_local_ips():
         parts = ip.split(".")
         if len(parts) != 4:
             continue
         prefix = ".".join(parts[:3])
+        if prefix in seen_prefixes:
+            continue
+        seen_prefixes.add(prefix)
         for host in range(1, 255):
             candidate = f"{prefix}.{host}"
-            if candidate != ip:
+            if candidate != ip and candidate not in targets:
                 targets.append(candidate)
     if not targets:
         return None
@@ -175,6 +192,7 @@ def discover_master(
     timeout: float = 3.0,
     stop_event: threading.Event | None = None,
     label: str = "",
+    verbose: bool = True,
 ) -> tuple[str, int] | None:
     """Cari Master di LAN. Return (ip, port) atau None.
 
@@ -222,7 +240,11 @@ def discover_master(
     if found is not None:
         return found
 
-    print(f"{prefix}Broadcast tidak terjawab; mencoba TCP sweep port {tcp_port} ...", flush=True)
+    if verbose:
+        print(
+            f"{prefix}Broadcast tidak terjawab; mencoba TCP sweep port {tcp_port} ...",
+            flush=True,
+        )
     swept = _tcp_sweep(int(tcp_port), timeout=timeout)
     if swept is not None:
         print(f"{prefix}Master ditemukan via TCP sweep: {swept[0]}:{swept[1]}.", flush=True)

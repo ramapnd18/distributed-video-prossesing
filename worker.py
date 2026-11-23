@@ -90,14 +90,15 @@ class WorkerNode:
     # ------------------------------------------------------------------
     # Auto-discovery Master
     # ------------------------------------------------------------------
-    def _resolve_master(self) -> tuple[str, int] | None:
+    def _resolve_master(self, verbose: bool = True) -> tuple[str, int] | None:
         """Kembalikan (ip, port) Master; 'auto' memicu UDP broadcast + TCP sweep."""
         if self.master_ip and self.master_ip.lower() not in ("auto", "discover"):
             return self.master_ip, self.master_port
 
-        self.log(
-            f"Mencari Master di LAN (UDP broadcast port {self.discovery_port}) ..."
-        )
+        if verbose:
+            self.log(
+                f"Mencari Master di LAN (UDP broadcast port {self.discovery_port}) ..."
+            )
         self.used_discovery = True
         found = discover_master(
             discovery_port=self.discovery_port,
@@ -105,6 +106,7 @@ class WorkerNode:
             timeout=self.discovery_timeout,
             stop_event=self.stop_event,
             label=self.worker_id,
+            verbose=verbose,
         )
         if found is None:
             return None
@@ -240,7 +242,25 @@ class WorkerNode:
     # Main loop
     # ------------------------------------------------------------------
     def start(self) -> int:
-        resolved = self._resolve_master()
+        # Ulangi discovery sampai connect_timeout: Master mungkin masih
+        # mengekstrak cache frame saat Worker dijalankan.
+        deadline = time.time() + max(10.0, self.connect_timeout)
+        resolved = None
+        attempt = 0
+        while resolved is None and not self.stop_event.is_set():
+            resolved = self._resolve_master(verbose=(attempt == 0))
+            if resolved is not None:
+                break
+            remaining = int(max(0, deadline - time.time()))
+            if remaining <= 0:
+                break
+            if attempt > 0:
+                self.log(
+                    f"Master belum ditemukan; coba lagi ({remaining}s tersisa)."
+                )
+            attempt += 1
+            self.stop_event.wait(1.5)
+
         if resolved is None:
             self.log(
                 "Master tidak ditemukan. Pastikan Master sudah berjalan, port UDP "
